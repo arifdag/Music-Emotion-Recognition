@@ -134,3 +134,60 @@ def aggregate_data(data_subset, threshold=0.4, apply_threshold=True):
             aggregated[col] = (aggregated[col] > threshold).astype(int)
 
     return aggregated
+
+
+def standardize_and_segment_audio(audio_path, sr=44100, segment_length=5):
+    """
+    Load audio files from a directory, then segment each into fixed-length chunks.
+
+    Parameters:
+        audio_path (str): Directory containing audio files.
+        sr (int): Sampling rate (default: 44100).
+        segment_length (int): Duration in seconds for each segment (default: 5).
+
+    Returns:
+        dict: Mapping of track IDs to lists of segments matching the exact segment length.
+    """
+    audio_segments = {}
+    try:
+        track_id = 1
+        audios = sorted(os.listdir(audio_path), key=natural_key)
+        for audio in audios:
+            y, sr = librosa.load(os.path.join(audio_path, audio), sr=sr, mono=True)
+            segment_samples = segment_length * sr
+            # Split audio into segments; only include segments of exact desired length
+            segments = [y[i:i + segment_samples] for i in range(0, len(y), segment_samples)
+                        if len(y[i:i + segment_samples]) == segment_samples]
+
+            audio_segments[track_id] = segments
+            track_id += 1
+        return audio_segments
+    except Exception as e:
+        print(f"Error: {e}")
+        return None
+
+
+def mel_spec_extraction(segments, sr=44100):
+    """
+    Compute mel spectrograms (in dB) for each audio segment.
+
+    Parameters:
+        segments (list of np.ndarray): List of audio segments.
+        sr (int): Sampling rate (default: 44100).
+
+    Returns:
+        np.ndarray: Array of mel spectrograms for the provided segments.
+    """
+    try:
+        mel_specs = []
+        for segment in segments:
+            mel_spec = librosa.feature.melspectrogram(y=segment, sr=sr, n_mels=128, n_fft=2048, hop_length=512)
+            # Convert the power spectrogram to decibel scale using the maximum power as reference
+            mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
+            mel_specs.append(mel_spec_db)
+
+        mel_specs = np.array(mel_specs)
+        return mel_specs
+    except Exception as e:
+        print(f"Error: {e}")
+        return None
