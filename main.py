@@ -150,12 +150,14 @@ def extract_audio_segments_and_labels(audio_path, aggregated_data, sr=44100, seg
         segment_length (int): Duration in seconds for each segment (default: 5).
 
     Returns:
-        tuple: (X, y) where:
+        tuple: (X, y, track_ids) where:
             X (np.ndarray): Array of audio segments with shape (n_segments, segment_length * sr).
             y (np.ndarray): Array of corresponding emotion labels with shape (n_segments, n_emotions).
+            track_ids (np.ndarray): Array of track IDs for each segment.
     """
     X_segments = []
     y_labels = []
+    track_ids = []
 
     try:
         track_id = 1
@@ -177,6 +179,7 @@ def extract_audio_segments_and_labels(audio_path, aggregated_data, sr=44100, seg
                     for segment in segments:
                         X_segments.append(segment)
                         y_labels.append(track_labels)
+                        track_ids.append(track_id)
                 else:
                     print(f"Warning: No labels found for track ID {track_id}")
 
@@ -185,12 +188,13 @@ def extract_audio_segments_and_labels(audio_path, aggregated_data, sr=44100, seg
         # Convert lists to numpy arrays
         X_segments = np.array(X_segments)
         y_labels = np.array(y_labels)
+        track_ids = np.array(track_ids)
 
-        return X_segments, y_labels
+        return X_segments, y_labels, track_ids
 
     except Exception as e:
         print(f"Error: {e}")
-        return None, None
+        return None, None, None
 
 
 def mel_spec_extraction(segments, sr=44100):
@@ -217,3 +221,77 @@ def mel_spec_extraction(segments, sr=44100):
     except Exception as e:
         print(f"Error: {e}")
         return None
+
+
+def split_data_by_track(X_segments, y_labels, track_ids, train_size=0.7, val_size=0.15, test_size=0.15,
+                        random_state=42):
+    """
+    Split data into training, validation, and test sets while ensuring all segments
+    from the same track stay together in the same set.
+
+    Parameters:
+        X_segments (np.ndarray): Array of audio segments or extracted features.
+        y_labels (np.ndarray): Array of corresponding emotion labels.
+        track_ids (np.ndarray): Array of track IDs for each segment.
+        train_size (float): Proportion of data to use for training (default: 0.7).
+        val_size (float): Proportion of data to use for validation (default: 0.15).
+        test_size (float): Proportion of data to use for testing (default: 0.15).
+        random_state (int): Random seed for reproducibility (default: 42).
+
+    Returns:
+        tuple: (X_train, X_val, X_test, y_train, y_val, y_test)
+    """
+    # Ensure proportions sum to 1
+    assert abs(train_size + val_size + test_size - 1.0) < 1e-10, "Split proportions must sum to 1"
+
+    # Get unique track IDs
+    unique_tracks = np.unique(track_ids)
+
+    # Shuffle tracks
+    np.random.seed(random_state)
+    np.random.shuffle(unique_tracks)
+
+    # Split tracks according to proportions
+    n_tracks = len(unique_tracks)
+    n_train = int(n_tracks * train_size)
+    n_val = int(n_tracks * val_size)
+
+    train_tracks = unique_tracks[:n_train]
+    val_tracks = unique_tracks[n_train:n_train + n_val]
+    test_tracks = unique_tracks[n_train + n_val:]
+
+    # Create masks for each split
+    train_mask = np.isin(track_ids, train_tracks)
+    val_mask = np.isin(track_ids, val_tracks)
+    test_mask = np.isin(track_ids, test_tracks)
+
+    # Apply masks to get split datasets
+    X_train = X_segments[train_mask]
+    y_train = y_labels[train_mask]
+
+    X_val = X_segments[val_mask]
+    y_val = y_labels[val_mask]
+
+    X_test = X_segments[test_mask]
+    y_test = y_labels[test_mask]
+
+    # Print split information
+    print(f"Data split complete by track ID:")
+    print(
+        f"  Training set:   {X_train.shape[0]} samples from {len(train_tracks)} tracks ({X_train.shape[0] / X_segments.shape[0] * 100:.1f}%)")
+    print(
+        f"  Validation set: {X_val.shape[0]} samples from {len(val_tracks)} tracks ({X_val.shape[0] / X_segments.shape[0] * 100:.1f}%)")
+    print(
+        f"  Test set:       {X_test.shape[0]} samples from {len(test_tracks)} tracks ({X_test.shape[0] / X_segments.shape[0] * 100:.1f}%)")
+
+    # Print label distribution in each split
+    print("\nLabel distribution across splits:")
+    for i, emotion in enumerate(emotion_columns):
+        train_dist = np.mean(y_train[:, i])
+        val_dist = np.mean(y_val[:, i])
+        test_dist = np.mean(y_test[:, i])
+        total_dist = np.mean(y_labels[:, i])
+        print(
+            f"  {emotion:<20}: Total: {total_dist:.3f}, Train: {train_dist:.3f}, Val: {val_dist:.3f}, Test: {test_dist:.3f}")
+
+    return X_train, X_val, X_test, y_train, y_val, y_test
