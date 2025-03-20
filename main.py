@@ -9,6 +9,19 @@ import pandas as pd
 dataset_path = "Music Data"
 data_csv_path = "Music Data/data.csv"
 
+# List of emotion annotation columns
+emotion_columns = [
+    'amazement',
+    'solemnity',
+    'tenderness',
+    'nostalgia',
+    'calmness',
+    'power',
+    'joyful_activation',
+    'tension',
+    'sadness'
+]
+
 
 def natural_key(string):
     """
@@ -103,7 +116,7 @@ def aggregate_data(data_subset, threshold=0.4, apply_threshold=True):
 
     Parameters:
         data_subset (pd.DataFrame): DataFrame containing the original annotations.
-        threshold (float): Value above which an emotion is considered present.
+        threshold (float): Value above which an emotion is considered present (Default: 0.4).
         apply_threshold (bool): If True, threshold averaged emotions to produce binary labels.
                                 If False, returns soft labels (average values).
 
@@ -113,18 +126,7 @@ def aggregate_data(data_subset, threshold=0.4, apply_threshold=True):
     The function groups the data by 'track id' and 'genre', computes the mean for each emotion,
     and then (optionally) thresholds the averages to create a binary multi-label vector per song.
     """
-    # List of emotion annotation columns
-    emotion_columns = [
-        'amazement',
-        'solemnity',
-        'tenderness',
-        'nostalgia',
-        'calmness',
-        'power',
-        'joyful_activation',
-        'tension',
-        'sadness'
-    ]
+
     # Group by 'track id' and 'genre', and compute mean of each emotion column
     aggregated = data_subset.groupby(['track id', 'genre'], as_index=False).mean()
 
@@ -136,35 +138,59 @@ def aggregate_data(data_subset, threshold=0.4, apply_threshold=True):
     return aggregated
 
 
-def standardize_and_segment_audio(audio_path, sr=44100, segment_length=5):
+def extract_audio_segments_and_labels(audio_path, aggregated_data, sr=44100, segment_length=5):
     """
-    Load audio files from a directory, then segment each into fixed-length chunks.
+    Load audio files from a directory, segment each into fixed-length chunks,
+    and associate each segment with its corresponding labels.
 
     Parameters:
         audio_path (str): Directory containing audio files.
+        aggregated_data (pd.DataFrame): DataFrame containing emotion labels for each track ID.
         sr (int): Sampling rate (default: 44100).
         segment_length (int): Duration in seconds for each segment (default: 5).
 
     Returns:
-        dict: Mapping of track IDs to lists of segments matching the exact segment length.
+        tuple: (X, y) where:
+            X (np.ndarray): Array of audio segments with shape (n_segments, segment_length * sr).
+            y (np.ndarray): Array of corresponding emotion labels with shape (n_segments, n_emotions).
     """
-    audio_segments = {}
+    X_segments = []
+    y_labels = []
+
     try:
         track_id = 1
         audios = sorted(os.listdir(audio_path), key=natural_key)
-        for audio in audios:
-            y, sr = librosa.load(os.path.join(audio_path, audio), sr=sr, mono=True)
-            segment_samples = segment_length * sr
-            # Split audio into segments; only include segments of exact desired length
-            segments = [y[i:i + segment_samples] for i in range(0, len(y), segment_samples)
-                        if len(y[i:i + segment_samples]) == segment_samples]
 
-            audio_segments[track_id] = segments
+        for audio in audios:
+            y_audio, sr = librosa.load(os.path.join(audio_path, audio), sr=sr, mono=True)
+            segment_samples = segment_length * sr
+
+            # Split audio into segments; only include segments of exact desired length
+            segments = [y_audio[i:i + segment_samples] for i in range(0, len(y_audio), segment_samples)
+                        if len(y_audio[i:i + segment_samples]) == segment_samples]
+
+            if segments:  # Only add to results if we have valid segments
+                if track_id in aggregated_data['track id'].values:
+                    # Extract emotion labels for this track
+                    track_labels = aggregated_data[aggregated_data['track id'] == track_id][emotion_columns].values[0]
+
+                    for segment in segments:
+                        X_segments.append(segment)
+                        y_labels.append(track_labels)
+                else:
+                    print(f"Warning: No labels found for track ID {track_id}")
+
             track_id += 1
-        return audio_segments
+
+        # Convert lists to numpy arrays
+        X_segments = np.array(X_segments)
+        y_labels = np.array(y_labels)
+
+        return X_segments, y_labels
+
     except Exception as e:
         print(f"Error: {e}")
-        return None
+        return None, None
 
 
 def mel_spec_extraction(segments, sr=44100):
