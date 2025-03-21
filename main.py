@@ -109,30 +109,35 @@ def reformat_data():
         return None
 
 
-def aggregate_data(data_subset, threshold=0.4, apply_threshold=True):
+def aggregate_data(data_subset, emotion_columns):
     """
-    Aggregates participant annotations into a single label per song.
+    Aggregate emotion annotations with dynamic thresholds.
 
     Parameters:
-        data_subset (pd.DataFrame): DataFrame containing the original annotations.
-        threshold (float): Value above which an emotion is considered present (Default: 0.4).
-        apply_threshold (bool): If True, threshold averaged emotions to produce binary labels.
-                                If False, returns soft labels (average values).
+        data_subset (pd.DataFrame): DataFrame with emotion annotations.
+        emotion_columns (list): List of emotion column names.
 
     Returns:
-        pd.DataFrame: Aggregated DataFrame with one row per song.
-
-    The function groups the data by 'track id' and 'genre', computes the mean for each emotion,
-    and then (optionally) thresholds the averages to create a binary multi-label vector per song.
+        pd.DataFrame: Aggregated DataFrame with binary emotion labels.
     """
-
-    # Group by 'track id' and 'genre', and compute mean of each emotion column
     aggregated = data_subset.groupby(['track id', 'genre'], as_index=False).mean()
 
-    if apply_threshold:
-        # Apply thresholding: mark emotion as 1 if its mean exceeds the threshold, else 0.
-        for col in emotion_columns:
-            aggregated[col] = (aggregated[col] > threshold).astype(int)
+    # Find optimal threshold for each emotion based on distribution
+    thresholds = {}
+    for emotion in emotion_columns:
+        values = aggregated[emotion].values
+        # Use the median as threshold if the distribution is skewed
+        if np.std(values) > 0.2:
+            threshold = np.median(values)
+        else:
+            # Otherwise use a fixed threshold
+            threshold = 0.4
+        thresholds[emotion] = threshold
+        print(f"Emotion: {emotion}, Threshold: {threshold:.3f}")
+
+    # Apply thresholds
+    for emotion in emotion_columns:
+        aggregated[emotion] = (aggregated[emotion] > thresholds[emotion]).astype(int)
 
     return aggregated
 
