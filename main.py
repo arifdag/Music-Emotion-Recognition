@@ -5,6 +5,7 @@ import shutil
 import librosa
 import numpy as np
 import pandas as pd
+import tensorflow as tf
 
 dataset_path = "Music Data"
 data_csv_path = "Music Data/data.csv"
@@ -370,3 +371,146 @@ def preprocess_data(X_train, X_val, X_test):
         X_test_norm = X_test_norm.reshape(X_test_norm.shape[0], X_test_norm.shape[1], X_test_norm.shape[2], 1)
 
     return X_train_norm, X_val_norm, X_test_norm
+
+def build_model(input_shape, num_emotions, dropout_rate=0.5):
+    """
+    Build a CNN model for music emotion recognition.
+
+    Parameters:
+        input_shape (tuple): Shape of input features.
+        num_emotions (int): Number of emotion classes.
+        dropout_rate (float): Dropout rate for regularization.
+
+    Returns:
+        tf.keras.Model: Compiled CNN model.
+    """
+    model = tf.keras.Sequential([
+        # Input layer
+        tf.keras.layers.Input(shape=input_shape),
+
+        # First Conv2D block
+        tf.keras.layers.Conv2D(32, kernel_size=(3, 3), activation='relu'),
+        tf.keras.layers.MaxPooling2D(pool_size=(2, 2)),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Dropout(dropout_rate / 2),
+
+        # Second Conv2D block
+        tf.keras.layers.Conv2D(64, kernel_size=(3, 3), activation='relu'),
+        tf.keras.layers.MaxPooling2D(pool_size=(2, 2)),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Dropout(dropout_rate / 2),
+
+        # Third Conv2D block
+        tf.keras.layers.Conv2D(128, kernel_size=(3, 3), activation='relu'),
+        tf.keras.layers.MaxPooling2D(pool_size=(2, 2)),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Dropout(dropout_rate),
+
+        # Flatten and dense layers
+        tf.keras.layers.Flatten(),
+        tf.keras.layers.Dense(256, activation='relu'),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Dropout(dropout_rate),
+
+        # Output layer
+        tf.keras.layers.Dense(num_emotions, activation='sigmoid')
+    ])
+
+    optimizer = tf.keras.optimizers.Adam(learning_rate=0.0005)
+
+    # Binary crossentropy for multi-label classification
+    model.compile(
+        optimizer=optimizer,
+        loss='binary_crossentropy',
+        metrics=[
+            'binary_accuracy',
+            tf.keras.metrics.AUC(),
+            tf.keras.metrics.Precision(),
+            tf.keras.metrics.Recall()
+        ]
+    )
+
+    return model
+
+
+def train_model(X_train, y_train, X_val, y_val, input_shape, num_emotions, epochs=50, batch_size=32,
+                patience=10):
+    """
+    Train the CNN model with data augmentation, learning rate scheduling, and early stopping.
+
+    Parameters:
+        X_train (np.ndarray): Training data.
+        y_train (np.ndarray): Training labels.
+        X_val (np.ndarray): Validation data.
+        y_val (np.ndarray): Validation labels.
+        input_shape (tuple): Shape of input features.
+        num_emotions (int): Number of emotion labels.
+        epochs (int): Maximum training epochs.
+        batch_size (int): Batch size.
+        patience (int): Early stopping patience.
+
+    Returns:
+        tuple: Trained model and training history.
+    """
+    # Data augmentation if train set is small
+    if X_train.shape[0] < 1000:
+        print("Data augmentation in progress...")
+        datagen = tf.keras.preprocessing.image.ImageDataGenerator(
+            rotation_range=10,
+            width_shift_range=0.1,
+            height_shift_range=0.1,
+            zoom_range=0.1,
+            horizontal_flip=True,
+            fill_mode='nearest'
+        )
+
+    model = build_model(input_shape, num_emotions)
+
+    # Learning rate scheduler
+    lr_scheduler = tf.keras.callbacks.ReduceLROnPlateau(
+        monitor='val_loss',
+        factor=0.5,
+        patience=5,
+        min_lr=0.00001,
+        verbose=1
+    )
+
+    # Early stopping
+    early_stopping = tf.keras.callbacks.EarlyStopping(
+        monitor='val_loss',
+        patience=patience,
+        restore_best_weights=True,
+        verbose=1
+    )
+
+    # Model checkpoint
+    model_checkpoint = tf.keras.callbacks.ModelCheckpoint(
+        'best_model.keras',
+        monitor='val_loss',
+        save_best_only=True,
+        verbose=1
+    )
+
+    # Train model
+    if X_train.shape[0] < 1000:
+        # Use data augmentation
+        history = model.fit(
+            datagen.flow(X_train, y_train, batch_size=batch_size),
+            steps_per_epoch=len(X_train) // batch_size,
+            validation_data=(X_val, y_val),
+            epochs=epochs,
+            callbacks=[lr_scheduler, early_stopping, model_checkpoint],
+            verbose=1
+        )
+    else:
+        # Train without augmentation for larger datasets
+        history = model.fit(
+            X_train, y_train,
+            validation_data=(X_val, y_val),
+            epochs=epochs,
+            batch_size=batch_size,
+            callbacks=[lr_scheduler, early_stopping, model_checkpoint],
+            verbose=1
+        )
+
+    return model, history
