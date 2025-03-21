@@ -333,3 +333,35 @@ def split_data_by_track(X_segments, y_labels, track_ids, train_size=0.7, val_siz
     except Exception as e:
         print(f"Error in split_data_by_track: {e}")
         return None, None, None, None, None, None
+
+
+def preprocess_data(X_train, X_val, X_test):
+    """
+    Standardize input data using training statistics and reshape 3D arrays for 2D CNN.
+
+    Parameters:
+        X_train (np.ndarray): Training data.
+        X_val (np.ndarray): Validation data.
+        X_test (np.ndarray): Test data.
+
+    Returns:
+        tuple: Preprocessed training, validation, and test data.
+    """
+    # Calculate mean and std from training data
+    mean = np.mean(X_train)
+    std = np.std(X_train)
+
+    # Standardize all sets using training statistics
+    X_train_norm = (X_train - mean) / (std + 1e-6)
+    X_val_norm = (X_val - mean) / (std + 1e-6)
+    X_test_norm = (X_test - mean) / (std + 1e-6)
+
+    # Reshape for 2D CNN if necessary
+    if len(X_train_norm.shape) == 3:
+        # For spectrograms (assuming shape is [samples, features, time])
+        # Reshape to [samples, features, time, 1] for 2D CNN
+        X_train_norm = X_train_norm.reshape(X_train_norm.shape[0], X_train_norm.shape[1], X_train_norm.shape[2], 1)
+        X_val_norm = X_val_norm.reshape(X_val_norm.shape[0], X_val_norm.shape[1], X_val_norm.shape[2], 1)
+        X_test_norm = X_test_norm.reshape(X_test_norm.shape[0], X_test_norm.shape[1], X_test_norm.shape[2], 1)
+
+    return X_train_norm, X_val_norm, X_test_norm
