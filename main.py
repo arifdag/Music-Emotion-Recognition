@@ -94,7 +94,6 @@ def reformat_data():
             'joyful_activation',  # Emotion annotation 7
             'tension',  # Emotion annotation 8
             'sadness',  # Emotion annotation 9
-            'mood'  # Participant's mood prior to playing
         ]
 
         # Strip any leading/trailing spaces in column names
@@ -197,29 +196,64 @@ def extract_audio_segments_and_labels(audio_path, aggregated_data, sr=44100, seg
         return None, None, None
 
 
-def mel_spec_extraction(segments, sr=44100):
-    """
-    Compute mel spectrograms (in dB) for each audio segment.
+def extract_features(audio_segments, sr=44100, n_mels=128, augment=False):
+    """Extract combined audio features (mel spectrogram, MFCC, spectral contrast) with optional augmentation.
 
-    Parameters:
-        segments (list of np.ndarray): List of audio segments.
-        sr (int): Sampling rate (default: 44100).
+    Args:
+        audio_segments: Input audio segments as numpy arrays
+        sr: Sample rate (default: 44100)
+        n_mels: Number of mel bands (default: 128)
+        augment: Enable pitch-shift augmentation (default: False)
 
     Returns:
-        np.ndarray: Array of mel spectrograms for the provided segments.
+        np.ndarray: Combined features array. Shape: (samples, features, time_steps)
+        When augmented, returns original and pitch-shifted versions concatenated
     """
     try:
-        mel_specs = []
-        for segment in segments:
-            mel_spec = librosa.feature.melspectrogram(y=segment, sr=sr, n_mels=128, n_fft=2048, hop_length=512)
-            # Convert the power spectrogram to decibel scale using the maximum power as reference
-            mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
-            mel_specs.append(mel_spec_db)
+        features = []
 
-        mel_specs = np.array(mel_specs)
-        return mel_specs
+        for segment in audio_segments:
+            # Basic feature - mel spectrogram
+            mel_spec = librosa.feature.melspectrogram(
+                y=segment,
+                sr=sr,
+                n_mels=n_mels,
+                n_fft=2048,
+                hop_length=512,
+                fmin=20,
+                fmax=8000
+            )
+            mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
+
+            # MFCC
+            mfcc = librosa.feature.mfcc(S=librosa.power_to_db(mel_spec), n_mfcc=20)
+
+            # Spectral contrast
+            contrast = librosa.feature.spectral_contrast(y=segment, sr=sr)
+
+            # Combine features
+            combined = np.vstack([mel_spec_db, mfcc, contrast])
+
+            # Optional augmentation
+            if augment:
+                # Pitch shift (mild)
+                segment_shifted = librosa.effects.pitch_shift(segment, sr=sr, n_steps=1)
+                mel_spec_shifted = librosa.feature.melspectrogram(
+                    y=segment_shifted, sr=sr, n_mels=n_mels, n_fft=2048, hop_length=512
+                )
+                mel_spec_db_shifted = librosa.power_to_db(mel_spec_shifted, ref=np.max)
+                mfcc_shifted = librosa.feature.mfcc(S=librosa.power_to_db(mel_spec_shifted), n_mfcc=20)
+                contrast_shifted = librosa.feature.spectral_contrast(y=segment_shifted, sr=sr)
+                combined_shifted = np.vstack([mel_spec_db_shifted, mfcc_shifted, contrast_shifted])
+
+                features.append(combined)
+                features.append(combined_shifted)
+            else:
+                features.append(combined)
+
+        return np.array(features)
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error in extract_features: {e}")
         return None
 
 
@@ -241,57 +275,61 @@ def split_data_by_track(X_segments, y_labels, track_ids, train_size=0.7, val_siz
     Returns:
         tuple: (X_train, X_val, X_test, y_train, y_val, y_test)
     """
-    # Ensure proportions sum to 1
-    assert abs(train_size + val_size + test_size - 1.0) < 1e-10, "Split proportions must sum to 1"
+    try:
+        # Ensure proportions sum to 1
+        assert abs(train_size + val_size + test_size - 1.0) < 1e-10, "Split proportions must sum to 1"
 
-    # Get unique track IDs
-    unique_tracks = np.unique(track_ids)
+        # Get unique track IDs
+        unique_tracks = np.unique(track_ids)
 
-    # Shuffle tracks
-    np.random.seed(random_state)
-    np.random.shuffle(unique_tracks)
+        # Shuffle tracks
+        np.random.seed(random_state)
+        np.random.shuffle(unique_tracks)
 
-    # Split tracks according to proportions
-    n_tracks = len(unique_tracks)
-    n_train = int(n_tracks * train_size)
-    n_val = int(n_tracks * val_size)
+        # Split tracks according to proportions
+        n_tracks = len(unique_tracks)
+        n_train = int(n_tracks * train_size)
+        n_val = int(n_tracks * val_size)
 
-    train_tracks = unique_tracks[:n_train]
-    val_tracks = unique_tracks[n_train:n_train + n_val]
-    test_tracks = unique_tracks[n_train + n_val:]
+        train_tracks = unique_tracks[:n_train]
+        val_tracks = unique_tracks[n_train:n_train + n_val]
+        test_tracks = unique_tracks[n_train + n_val:]
 
-    # Create masks for each split
-    train_mask = np.isin(track_ids, train_tracks)
-    val_mask = np.isin(track_ids, val_tracks)
-    test_mask = np.isin(track_ids, test_tracks)
+        # Create masks for each split
+        train_mask = np.isin(track_ids, train_tracks)
+        val_mask = np.isin(track_ids, val_tracks)
+        test_mask = np.isin(track_ids, test_tracks)
 
-    # Apply masks to get split datasets
-    X_train = X_segments[train_mask]
-    y_train = y_labels[train_mask]
+        # Apply masks to get split datasets
+        X_train = X_segments[train_mask]
+        y_train = y_labels[train_mask]
 
-    X_val = X_segments[val_mask]
-    y_val = y_labels[val_mask]
+        X_val = X_segments[val_mask]
+        y_val = y_labels[val_mask]
 
-    X_test = X_segments[test_mask]
-    y_test = y_labels[test_mask]
+        X_test = X_segments[test_mask]
+        y_test = y_labels[test_mask]
 
-    # Print split information
-    print(f"Data split complete by track ID:")
-    print(
-        f"  Training set:   {X_train.shape[0]} samples from {len(train_tracks)} tracks ({X_train.shape[0] / X_segments.shape[0] * 100:.1f}%)")
-    print(
-        f"  Validation set: {X_val.shape[0]} samples from {len(val_tracks)} tracks ({X_val.shape[0] / X_segments.shape[0] * 100:.1f}%)")
-    print(
-        f"  Test set:       {X_test.shape[0]} samples from {len(test_tracks)} tracks ({X_test.shape[0] / X_segments.shape[0] * 100:.1f}%)")
-
-    # Print label distribution in each split
-    print("\nLabel distribution across splits:")
-    for i, emotion in enumerate(emotion_columns):
-        train_dist = np.mean(y_train[:, i])
-        val_dist = np.mean(y_val[:, i])
-        test_dist = np.mean(y_test[:, i])
-        total_dist = np.mean(y_labels[:, i])
+        # Print split information
+        print(f"Data split complete by track ID:")
         print(
-            f"  {emotion:<20}: Total: {total_dist:.3f}, Train: {train_dist:.3f}, Val: {val_dist:.3f}, Test: {test_dist:.3f}")
+            f"  Training set:   {X_train.shape[0]} samples from {len(train_tracks)} tracks ({X_train.shape[0] / X_segments.shape[0] * 100:.1f}%)")
+        print(
+            f"  Validation set: {X_val.shape[0]} samples from {len(val_tracks)} tracks ({X_val.shape[0] / X_segments.shape[0] * 100:.1f}%)")
+        print(
+            f"  Test set:       {X_test.shape[0]} samples from {len(test_tracks)} tracks ({X_test.shape[0] / X_segments.shape[0] * 100:.1f}%)")
 
-    return X_train, X_val, X_test, y_train, y_val, y_test
+        # Print label distribution in each split
+        print("\nLabel distribution across splits:")
+        for i, emotion in enumerate(emotion_columns):
+            train_dist = np.mean(y_train[:, i])
+            val_dist = np.mean(y_val[:, i])
+            test_dist = np.mean(y_test[:, i])
+            total_dist = np.mean(y_labels[:, i])
+            print(
+                f"  {emotion:<20}: Total: {total_dist:.3f}, Train: {train_dist:.3f}, Val: {val_dist:.3f}, Test: {test_dist:.3f}")
+
+        return X_train, X_val, X_test, y_train, y_val, y_test
+    except Exception as e:
+        print(f"Error in split_data_by_track: {e}")
+        return None, None, None, None, None, None
