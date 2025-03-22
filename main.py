@@ -1,4 +1,5 @@
-﻿import os
+﻿import json
+import os
 import re
 import shutil
 
@@ -6,6 +7,7 @@ import librosa
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+from sklearn.metrics import hamming_loss, f1_score, precision_score, recall_score
 
 dataset_path = "Music Data"
 data_csv_path = "Music Data/data.csv"
@@ -282,51 +284,98 @@ def split_data_by_track(X_segments, y_labels, track_ids, train_size=0.7, val_siz
         tuple: (X_train, X_val, X_test, y_train, y_val, y_test)
     """
     try:
-        # Ensure proportions sum to 1
-        assert abs(train_size + val_size + test_size - 1.0) < 1e-10, "Split proportions must sum to 1"
+        assert abs(train_size + val_size + test_size - 1.0) < 1e-10
 
-        # Get unique track IDs
+        # Get unique tracks and their associated emotion labels
         unique_tracks = np.unique(track_ids)
+        track_to_emotions = {}
 
-        # Shuffle tracks
+        for track in unique_tracks:
+            # Find indices where this track appears
+            track_indices = np.where(track_ids == track)[0]
+            # Get the emotion labels for this track (should all be the same)
+            track_emotions = y_labels[track_indices[0]]
+            track_to_emotions[track] = track_emotions
+
+        # Initialize track lists for each split
+        train_tracks = []
+        val_tracks = []
+        test_tracks = []
+
         np.random.seed(random_state)
-        np.random.shuffle(unique_tracks)
 
-        # Split tracks according to proportions
-        n_tracks = len(unique_tracks)
-        n_train = int(n_tracks * train_size)
-        n_val = int(n_tracks * val_size)
+        # For each emotion, ensure proportional representation
+        for emotion_idx, emotion in enumerate(emotion_columns):
+            # Find tracks that have this emotion
+            positive_tracks = [track for track, emotions in track_to_emotions.items()
+                               if emotions[emotion_idx] == 1]
 
-        train_tracks = unique_tracks[:n_train]
-        val_tracks = unique_tracks[n_train:n_train + n_val]
-        test_tracks = unique_tracks[n_train + n_val:]
+            # Skip if no tracks have this emotion
+            if not positive_tracks:
+                print(f"Warning: No tracks found with emotion '{emotion}'")
+                continue
+
+            # Shuffle tracks with this emotion
+            np.random.shuffle(positive_tracks)
+
+            # Calculate split sizes
+            n_tracks = len(positive_tracks)
+            n_train = max(1, int(n_tracks * train_size))  # Ensure at least 1 track in train
+            n_val = max(1, int(n_tracks * val_size))  # Ensure at least 1 track in val
+
+            # Ensure at least 1 track in test if there are enough tracks
+            if n_tracks > 2:  # We need at least 3 tracks to distribute across 3 splits
+                # Adjust to ensure we have at least one track in each split
+                if n_train + n_val >= n_tracks:
+                    n_train = max(1, n_tracks - 2)
+                    n_val = 1
+
+                train_tracks.extend(positive_tracks[:n_train])
+                val_tracks.extend(positive_tracks[n_train:n_train + n_val])
+                test_tracks.extend(positive_tracks[n_train + n_val:])
+            else:
+                # If we have only 1-2 tracks, prioritize training data
+                train_tracks.extend(positive_tracks)
+                print(f"Warning: Only {n_tracks} tracks with emotion '{emotion}', all added to training")
+
+        # Remove duplicates
+        train_tracks = list(set(train_tracks))
+        val_tracks = list(set(val_tracks))
+        test_tracks = list(set(test_tracks))
+
+        # Handle tracks without any of the target emotions
+        remaining_tracks = [track for track in unique_tracks
+                            if track not in train_tracks and
+                            track not in val_tracks and
+                            track not in test_tracks]
+
+        # Distribute remaining tracks proportionally
+        np.random.shuffle(remaining_tracks)
+        n_remaining = len(remaining_tracks)
+        n_train_remaining = int(n_remaining * train_size)
+        n_val_remaining = int(n_remaining * val_size)
+
+        train_tracks.extend(remaining_tracks[:n_train_remaining])
+        val_tracks.extend(remaining_tracks[n_train_remaining:n_train_remaining + n_val_remaining])
+        test_tracks.extend(remaining_tracks[n_train_remaining + n_val_remaining:])
 
         # Create masks for each split
         train_mask = np.isin(track_ids, train_tracks)
         val_mask = np.isin(track_ids, val_tracks)
         test_mask = np.isin(track_ids, test_tracks)
 
-        # Apply masks to get split datasets
         X_train = X_segments[train_mask]
         y_train = y_labels[train_mask]
-
         X_val = X_segments[val_mask]
         y_val = y_labels[val_mask]
-
         X_test = X_segments[test_mask]
         y_test = y_labels[test_mask]
 
-        # Print split information
-        print(f"Data split complete by track ID:")
-        print(
-            f"  Training set:   {X_train.shape[0]} samples from {len(train_tracks)} tracks ({X_train.shape[0] / X_segments.shape[0] * 100:.1f}%)")
-        print(
-            f"  Validation set: {X_val.shape[0]} samples from {len(val_tracks)} tracks ({X_val.shape[0] / X_segments.shape[0] * 100:.1f}%)")
-        print(
-            f"  Test set:       {X_test.shape[0]} samples from {len(test_tracks)} tracks ({X_test.shape[0] / X_segments.shape[0] * 100:.1f}%)")
+        # Print statistics
+        print(f"Training set:   {X_train.shape[0]} samples from {len(train_tracks)} tracks")
+        print(f"Validation set: {X_val.shape[0]} samples from {len(val_tracks)} tracks")
+        print(f"Test set:       {X_test.shape[0]} samples from {len(test_tracks)} tracks")
 
-        # Print label distribution in each split
-        print("\nLabel distribution across splits:")
         for i, emotion in enumerate(emotion_columns):
             train_dist = np.mean(y_train[:, i])
             val_dist = np.mean(y_val[:, i])
@@ -336,6 +385,7 @@ def split_data_by_track(X_segments, y_labels, track_ids, train_size=0.7, val_siz
                 f"  {emotion:<20}: Total: {total_dist:.3f}, Train: {train_dist:.3f}, Val: {val_dist:.3f}, Test: {test_dist:.3f}")
 
         return X_train, X_val, X_test, y_train, y_val, y_test
+
     except Exception as e:
         print(f"Error in split_data_by_track: {e}")
         return None, None, None, None, None, None
@@ -371,6 +421,7 @@ def preprocess_data(X_train, X_val, X_test):
         X_test_norm = X_test_norm.reshape(X_test_norm.shape[0], X_test_norm.shape[1], X_test_norm.shape[2], 1)
 
     return X_train_norm, X_val_norm, X_test_norm
+
 
 def build_model(input_shape, num_emotions, dropout_rate=0.5):
     """
@@ -422,6 +473,7 @@ def build_model(input_shape, num_emotions, dropout_rate=0.5):
     model.compile(
         optimizer=optimizer,
         loss='binary_crossentropy',
+        # 'binary_crossentropy' is used as the loss function, but focal loss can be an alternative.
         metrics=[
             'binary_accuracy',
             tf.keras.metrics.AUC(),
@@ -514,3 +566,168 @@ def train_model(X_train, y_train, X_val, y_val, input_shape, num_emotions, epoch
         )
 
     return model, history
+
+
+def evaluate_model(model, X_test, y_test, emotion_columns):
+    """
+    Evaluate model with multiple metrics for multi-label classification.
+
+    Parameters:
+        model: Trained model
+        X_test: Processed test data
+        y_test: Test labels
+        emotion_columns: List of emotion column names
+
+    Returns:
+        dict: Dictionary of evaluation metrics
+    """
+    # Get predictions
+    y_pred_prob = model.predict(X_test)
+
+    # Use 0.5 as threshold for predictions
+    y_pred = (y_pred_prob >= 0.5).astype(int)
+
+    # Calculate metrics
+    metrics = {
+        'hamming_loss': hamming_loss(y_test, y_pred),
+        'sample_f1': f1_score(y_test, y_pred, average='samples'),
+        'micro_f1': f1_score(y_test, y_pred, average='micro'),
+        'macro_f1': f1_score(y_test, y_pred, average='macro'),
+        'precision_micro': precision_score(y_test, y_pred, average='micro'),
+        'recall_micro': recall_score(y_test, y_pred, average='micro')
+    }
+
+    # Per-emotion metrics
+    for i, emotion in enumerate(emotion_columns):
+        metrics[f'{emotion}_f1'] = f1_score(y_test[:, i], y_pred[:, i])
+        metrics[f'{emotion}_precision'] = precision_score(y_test[:, i], y_pred[:, i], zero_division=0)
+        metrics[f'{emotion}_recall'] = recall_score(y_test[:, i], y_pred[:, i])
+
+    return metrics
+
+
+def focal_loss(gamma=2.0, alpha=0.25):
+    """
+    Focal loss for handling class imbalance.
+
+    Parameters:
+        gamma: Focusing parameter
+        alpha: Balancing parameter
+
+    Returns:
+        loss_function: Focal loss function
+    """
+
+    def focal_loss_fixed(y_true, y_pred):
+        # Clip prediction values to avoid log(0)
+        epsilon = 1e-7
+        y_pred = tf.clip_by_value(y_pred, epsilon, 1 - epsilon)
+
+        # Calculate standard binary cross-entropy loss
+        bce = tf.keras.backend.binary_crossentropy(y_true, y_pred)
+
+        # Calculate focal loss components
+        p_t = y_true * y_pred + (1 - y_true) * (1 - y_pred)
+        alpha_factor = y_true * alpha + (1 - y_true) * (1 - alpha)
+        modulating_factor = tf.pow(1.0 - p_t, gamma)
+
+        # Calculate focal loss
+        loss = alpha_factor * modulating_factor * bce
+
+        return tf.reduce_mean(loss)
+
+    return focal_loss_fixed
+
+
+def main():
+    """
+        Executes the music emotion recognition pipeline by loading and preprocessing data,
+        extracting features, training and evaluating the model, and saving the results.
+
+        Returns:
+            tuple: A tuple containing the trained model, training history, and evaluation metrics.
+        """
+    print("Starting music emotion recognition pipeline...")
+
+    # Load and reformat the data
+    print("Loading and reformatting data...")
+    data_subset = reformat_data()
+    if data_subset is None:
+        print("Failed to load data. Exiting.")
+        return
+    print(f"Data loaded successfully. Shape: {data_subset.shape}")
+
+    # Aggregate data
+    print("Aggregating annotations...")
+    aggregated_data = aggregate_data(data_subset, emotion_columns)
+    print(f"Data aggregated successfully. Shape: {aggregated_data.shape}")
+
+    # Extract audio segments and their labels
+    print("Extracting audio segments...")
+    audio_path = os.path.join(dataset_path, 'Musics')
+    X_segments, y_labels, track_ids = extract_audio_segments_and_labels(audio_path, aggregated_data, segment_length=5)
+    if X_segments is None or y_labels is None:
+        print("Failed to extract audio segments. Exiting.")
+        return
+    print(f"Audio segments extracted. Shape: {X_segments.shape}, Labels shape: {y_labels.shape}")
+
+    # Extract features
+    print("Extracting features...")
+    features = extract_features(X_segments, augment=False)
+    print(f"Features extracted. Shape: {features.shape}")
+
+    # Split the data
+    print("Splitting data into train, validation, and test sets...")
+    X_train, X_val, X_test, y_train, y_val, y_test = split_data_by_track(
+        features, y_labels, track_ids, train_size=0.7, val_size=0.15, test_size=0.15
+    )
+
+    # Preprocess data
+    print("Preprocessing data...")
+    X_train_proc, X_val_proc, X_test_proc = preprocess_data(X_train, X_val, X_test)
+    print(f"Preprocessed data shapes: {X_train_proc.shape}, {X_val_proc.shape}, {X_test_proc.shape}")
+
+    # Check the final input shape for the model
+    input_shape = X_train_proc.shape[1:]
+    num_emotions = y_train.shape[1]
+    print(f"Model input shape: {input_shape}, Number of emotions: {num_emotions}")
+
+    # Train the model
+    print("Training the model...")
+    model, history = train_model(
+        X_train_proc,
+        y_train,
+        X_val_proc,
+        y_val,
+        input_shape,
+        num_emotions,
+        epochs=50,
+        batch_size=32,
+        patience=10
+    )
+
+    # Evaluate the model
+    print("Evaluating model...")
+    metrics = evaluate_model(model, X_test_proc, y_test, emotion_columns)
+    for metric_name, metric_value in metrics.items():
+        print(f"{metric_name}: {metric_value:.3f}")
+
+    # Save the model
+    model.save("music_emotion_model.keras")
+    print("Model saved successfully.")
+
+    # Save the training history
+    with open('Music_emotion_history.json', 'w') as f:
+        json.dump(history.history, f)
+        print("Training history saved successfully.")
+
+    # Save the metrics
+    with open('Music_emotion_metrics.json', 'w') as f:
+        json.dump(metrics, f)
+        print("Metrics saved successfully.")
+
+    return model, history, metrics
+
+
+if __name__ == "__main__":
+    main()
