@@ -1,0 +1,17 @@
+# Core ML/Data Libraries
+tensorflow>=2.8      
+numpy
+pandas
+scikit-learn
+imbalanced-learn     # For SMOTE
+
+# Audio Processing
+librosa
+
+# Visualization & Notebook
+matplotlib
+seaborn
+umap-learn         # For UMAP embeddings
+jupyter            
+
+
