@@ -105,71 +105,49 @@ class AudioManager:
         Returns:
             np.ndarray: Array of combined features.
         """
-        features = []
+        try:
+            features = []
 
-        for segment in audio_segments:
-            mel_spec = librosa.feature.melspectrogram(
-                y=segment,
-                sr=sr,
-                n_mels=n_mels,
-                n_fft=2048,
-                hop_length=512,
-                fmin=20,
-                fmax=8000,
-            )
-            mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
-            mfcc = librosa.feature.mfcc(S=mel_spec_db, n_mfcc=20)
-            chroma = librosa.feature.chroma_stft(y=segment, sr=sr)
-            contrast = librosa.feature.spectral_contrast(y=segment, sr=sr)
-            spectral_centroid = librosa.feature.spectral_centroid(y=segment, sr=sr)
-            spectral_bandwidth = librosa.feature.spectral_bandwidth(y=segment, sr=sr)
-            spectral_rolloff = librosa.feature.spectral_rolloff(y=segment, sr=sr)
-            rms = librosa.feature.rms(y=segment)
-            zcr = librosa.feature.zero_crossing_rate(y=segment)
-            t = mel_spec_db.shape[1]
-            tempo = librosa.beat.tempo(y=segment, sr=sr)
-            tempo_feature = np.full((1, t), tempo[0])
-
-            # Combine features
-            combined = np.vstack([
-                mel_spec_db, mfcc, chroma, contrast,
-                spectral_centroid, spectral_bandwidth, spectral_rolloff,
-                rms, zcr, tempo_feature
-            ])
-
-            # Optional augmentation
-            if augment:
-                segment_shifted = librosa.effects.pitch_shift(segment, sr=sr, n_steps=1)
-                mel_spec_shifted = librosa.feature.melspectrogram(
-                    y=segment_shifted,
+            for segment in audio_segments:
+                # Basic feature - mel spectrogram
+                mel_spec = librosa.feature.melspectrogram(
+                    y=segment,
                     sr=sr,
                     n_mels=n_mels,
                     n_fft=2048,
                     hop_length=512,
                     fmin=20,
-                    fmax=8000,
+                    fmax=8000
                 )
-                mel_spec_db_shifted = librosa.power_to_db(mel_spec_shifted, ref=np.max)
-                mfcc_shifted = librosa.feature.mfcc(S=mel_spec_db_shifted, n_mfcc=20)
-                chroma_shifted = librosa.feature.chroma_stft(y=segment_shifted, sr=sr)
-                contrast_shifted = librosa.feature.spectral_contrast(y=segment_shifted, sr=sr)
-                spectral_centroid_shifted = librosa.feature.spectral_centroid(y=segment_shifted, sr=sr)
-                spectral_bandwidth_shifted = librosa.feature.spectral_bandwidth(y=segment_shifted, sr=sr)
-                spectral_rolloff_shifted = librosa.feature.spectral_rolloff(y=segment_shifted, sr=sr)
-                rms_shifted = librosa.feature.rms(y=segment_shifted)
-                zcr_shifted = librosa.feature.zero_crossing_rate(y=segment_shifted)
-                t_shifted = mel_spec_db_shifted.shape[1]
-                tempo_shifted = librosa.beat.tempo(y=segment_shifted, sr=sr)
-                tempo_feature_shifted = np.full((1, t_shifted), tempo_shifted[0])
+                mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
 
-                combined_shifted = np.vstack([
-                    mel_spec_db_shifted, mfcc_shifted, chroma_shifted, contrast_shifted,
-                    spectral_centroid_shifted, spectral_bandwidth_shifted, spectral_rolloff_shifted,
-                    rms_shifted, zcr_shifted, tempo_feature_shifted
-                ])
-                features.append(combined)
-                features.append(combined_shifted)
-            else:
-                features.append(combined)
+                # MFCC
+                mfcc = librosa.feature.mfcc(S=librosa.power_to_db(mel_spec), n_mfcc=20)
 
-        return np.array(features)
+                # Spectral contrast
+                contrast = librosa.feature.spectral_contrast(y=segment, sr=sr)
+
+                # Combine features
+                combined = np.vstack([mel_spec_db, mfcc, contrast])
+
+                # Optional augmentation
+                if augment:
+                    # Pitch shift (mild)
+                    segment_shifted = librosa.effects.pitch_shift(segment, sr=sr, n_steps=1)
+                    mel_spec_shifted = librosa.feature.melspectrogram(
+                        y=segment_shifted, sr=sr, n_mels=n_mels, n_fft=2048, hop_length=512
+                    )
+                    mel_spec_db_shifted = librosa.power_to_db(mel_spec_shifted, ref=np.max)
+                    mfcc_shifted = librosa.feature.mfcc(S=librosa.power_to_db(mel_spec_shifted), n_mfcc=20)
+                    contrast_shifted = librosa.feature.spectral_contrast(y=segment_shifted, sr=sr)
+                    combined_shifted = np.vstack([mel_spec_db_shifted, mfcc_shifted, contrast_shifted])
+
+                    features.append(combined)
+                    features.append(combined_shifted)
+                else:
+                    features.append(combined)
+
+            return np.array(features)
+        except Exception as e:
+            print(f"Error in extract_features: {e}")
+            return None

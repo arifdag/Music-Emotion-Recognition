@@ -55,35 +55,6 @@ class ModelManager:
 
         return loss
 
-    def residual_block(self, x, filters, kernel_size=(3, 3), pool=True, dropout_rate=0.3):
-        """
-        Builds a residual block.
-
-        Parameters:
-            x: Input tensor.
-            filters (int): Number of filters.
-            kernel_size (tuple): Kernel size.
-            pool (bool): Whether to apply pooling.
-            dropout_rate (float): Dropout rate.
-
-        Returns:
-            Tensor: Output tensor.
-        """
-        shortcut = x
-        x = tf.keras.layers.Conv2D(filters, kernel_size, padding="same", activation="relu")(x)
-        x = tf.keras.layers.BatchNormalization()(x)
-        x = tf.keras.layers.Conv2D(filters, kernel_size, padding="same")(x)
-        x = tf.keras.layers.BatchNormalization()(x)
-
-        if pool:
-            x = tf.keras.layers.MaxPooling2D(pool_size=(2, 2), padding="same")(x)
-            shortcut = tf.keras.layers.Conv2D(filters, (1, 1), strides=(2, 2), padding="same")(shortcut)
-
-        x = tf.keras.layers.Add()([x, shortcut])
-        x = tf.keras.layers.Activation("relu")(x)
-        x = tf.keras.layers.Dropout(dropout_rate)(x)
-
-        return x
 
     def build_model(self, input_shape, class_weights, dropout_rate=0.5, learning_rate=0.0005):
         """
@@ -98,25 +69,42 @@ class ModelManager:
         Returns:
             tf.keras.Model: The compiled model.
         """
-        inputs = tf.keras.layers.Input(shape=input_shape)
-        x = tf.keras.layers.Conv2D(32, (3, 3), padding="same", activation="relu")(inputs)
-        x = tf.keras.layers.BatchNormalization()(x)
+        l2_reg = 0.001
+        model = tf.keras.Sequential([
+            # Input layer
+            tf.keras.layers.Input(shape=input_shape),
 
-        x = self.residual_block(x, filters=32, kernel_size=(3, 3), pool=True, dropout_rate=dropout_rate / 2)
-        x = self.residual_block(x, filters=64, kernel_size=(3, 3), pool=True, dropout_rate=dropout_rate)
+            # First Conv2D block
+            tf.keras.layers.Conv2D(32, kernel_size=(3, 3), activation='relu', kernel_regularizer=tf.keras.regularizers.L2(l2_reg)),
+            tf.keras.layers.MaxPooling2D(pool_size=(2, 2)),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Dropout(dropout_rate / 2),
 
-        x = tf.keras.layers.Flatten()(x)
-        x = tf.keras.layers.Dense(256, activation="relu")(x)
-        x = tf.keras.layers.BatchNormalization()(x)
-        x = tf.keras.layers.Dropout(dropout_rate)(x)
+            # Second Conv2D block
+            tf.keras.layers.Conv2D(64, kernel_size=(3, 3), activation='relu', kernel_regularizer=tf.keras.regularizers.L2(l2_reg)),
+            tf.keras.layers.MaxPooling2D(pool_size=(2, 2)),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Dropout(dropout_rate / 2),
 
-        outputs = tf.keras.layers.Dense(self.num_emotions, activation="sigmoid")(x)
+            # Third Conv2D block
+            tf.keras.layers.Conv2D(128, kernel_size=(3, 3), activation='relu', kernel_regularizer=tf.keras.regularizers.L2(l2_reg)),
+            tf.keras.layers.MaxPooling2D(pool_size=(2, 2)),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Dropout(dropout_rate),
 
-        model = tf.keras.models.Model(inputs=inputs, outputs=outputs)
+            # Flatten and dense layers
+            tf.keras.layers.Flatten(),
+            tf.keras.layers.Dense(256, activation='relu', kernel_regularizer=tf.keras.regularizers.L2(l2_reg)),
+            tf.keras.layers.BatchNormalization(),
+            tf.keras.layers.Dropout(dropout_rate),
+
+            # Output layer
+            tf.keras.layers.Dense(self.num_emotions, activation='sigmoid')
+        ])
         optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
         model.compile(
             optimizer=optimizer,
-            loss=self.weighted_binary_crossentropy(class_weights),
+            loss='binary_crossentropy',
             metrics=[
                 "binary_accuracy",
                 tf.keras.metrics.AUC(),
@@ -158,7 +146,7 @@ class ModelManager:
 
         # Learning rate scheduler
         lr_scheduler = tf.keras.callbacks.ReduceLROnPlateau(
-            monitor="val_loss", factor=0.5, patience=5, min_lr=0.00001, verbose=1
+            monitor="val_loss", factor=0.5, patience=5, min_lr=0.0000001, verbose=1
         )
 
         # Early stopping

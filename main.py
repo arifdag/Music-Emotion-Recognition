@@ -1,5 +1,10 @@
-﻿import os
+﻿import argparse
+import os
 import json
+
+import numpy as np
+import tensorflow as tf
+
 from audio_manager import AudioManager
 from augmentor import Augmentor
 from data_manager import DataManager
@@ -66,7 +71,7 @@ class MusicEmotionPipeline:
 
         # Augment underrepresented classes using DataManager's print function for class distribution
         X_train_aug, y_train_aug = self.augmentor.augment_underrepresented_labels(
-            X_train, y_train, target_ratio=0.3, print_func=self.data_manager.print_class_distribution
+            X_train, y_train, target_ratio=0.4, print_func=self.data_manager.print_class_distribution
         )
 
         # Preprocess the dataset (standardization and reshaping for CNN)
@@ -78,7 +83,7 @@ class MusicEmotionPipeline:
         num_emotions = y_train_aug.shape[1]
         model_manager = ModelManager(num_emotions, self.emotion_columns)
         class_weights = model_manager.compute_class_weights(y_train_aug)
-        model = model_manager.build_model(input_shape, class_weights)
+        model = model_manager.build_model(input_shape, class_weights, dropout_rate=0.5,learning_rate=0.00005)
         history = model_manager.train_model(model, X_train_proc, y_train_aug, X_val_proc, y_val, input_shape,
                                             epochs=50, batch_size=32, patience=10)
 
@@ -101,12 +106,118 @@ class MusicEmotionPipeline:
         return model, history, metrics
 
 
-if __name__ == "__main__":
-    DATASET_PATH = "Music Data"
-    DATA_CSV_PATH = os.path.join(DATASET_PATH, "data.csv")
-    EMOTION_COLUMNS = [
-        "amazement", "solemnity", "tenderness", "nostalgia",
-        "calmness", "power", "joyful_activation", "tension", "sadness"
-    ]
-    pipeline = MusicEmotionPipeline(DATASET_PATH, DATA_CSV_PATH, EMOTION_COLUMNS, segment_length=3)
+# ──────────────────────────────────────────────────────────────────────────────
+# CONFIGURATION
+# ──────────────────────────────────────────────────────────────────────────────
+DATASET_PATH = "Music Data"
+DATA_CSV_PATH = os.path.join(DATASET_PATH, "data.csv")
+EMOTION_COLUMNS = [
+    "amazement", "solemnity", "tenderness", "nostalgia",
+    "calmness", "power", "joyful_activation", "tension", "sadness"
+]
+SEGMENT_LENGTH = 3
+MODEL_PATH = "music_emotion_model.keras"
+HISTORY_PATH = "Music_emotion_history.json"
+METRICS_PATH = "Music_emotion_metrics.json"
+
+# ──────────────────────────────────────────────────────────────────────────────
+def train_pipeline():
+    from main import MusicEmotionPipeline
+    pipeline = MusicEmotionPipeline(
+        DATASET_PATH,
+        DATA_CSV_PATH,
+        EMOTION_COLUMNS,
+        segment_length=SEGMENT_LENGTH
+    )
     pipeline.run()
+    # pipeline.run() already saves model, history & metrics
+    print("Training complete. Model, history, and metrics have been saved.")
+
+# ──────────────────────────────────────────────────────────────────────────────
+def evaluate_pipeline():
+    # Load and reformat CSV → track‐level labels
+    dm = DataManager(DATA_CSV_PATH, EMOTION_COLUMNS)
+    data_subset = dm.reformat_data()
+    agg = dm.aggregate_data(data_subset)
+
+    # Extract segments & labels
+    am = AudioManager(DATASET_PATH)
+    X_seg, y_lbl, track_ids = am.extract_audio_segments_and_labels(
+        os.path.join(DATASET_PATH, "Musics"),
+        agg,
+        EMOTION_COLUMNS,
+        segment_length=SEGMENT_LENGTH
+    )
+
+    # Extract features (no augmentation)
+    features = am.extract_features(X_seg, augment=False)
+
+    # Split by track
+    dsm = DatasetManager(EMOTION_COLUMNS)
+    X_train, X_val, X_test, y_train, y_val, y_test = dsm.split_data_by_track(
+        features, y_lbl, track_ids,
+        train_size=0.7, val_size=0.15, test_size=0.15
+    )
+
+    # Preprocess
+    X_train_p, X_val_p, X_test_p = dsm.preprocess_data(X_train, X_val, X_test)
+
+    # Load your saved model
+    model = tf.keras.models.load_model(MODEL_PATH)
+    print(f"Loaded model from {MODEL_PATH}")
+
+    # Find best thresholds on validation set
+    mm = ModelManager(len(EMOTION_COLUMNS), EMOTION_COLUMNS)
+    y_val_prob = model.predict(X_val_p)
+    best_thresholds = mm.find_best_thresholds(y_val, y_val_prob)
+    print("Best thresholds:", best_thresholds)
+
+    # Evaluate on test set
+    metrics, used_thresholds = mm.evaluate_model(model, X_test_p, y_test, thresholds=best_thresholds)
+    print(json.dumps(metrics, indent=2))
+
+    out_dir = "test_data"
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Prepare file path
+    fp = os.path.join(out_dir, "test_data.npz")
+
+    # Collect arrays
+    X_test_proc = X_test_p
+    y_pred_prob = model.predict(X_test_proc)
+    cols = np.array(EMOTION_COLUMNS)
+    ths = np.array(used_thresholds)
+
+    # Save into that folder
+    np.savez(
+        fp,
+        X_test_proc=X_test_proc,
+        y_test=y_test,
+        emotion_cols=cols,
+        y_pred_prob=y_pred_prob,
+        thresholds=ths,
+    )
+    print(f"→ Saved all test data to '{fp}'")
+
+    # (Re)save metrics
+    with open(METRICS_PATH, "w") as f:
+        json.dump(metrics, f)
+    print(f"Test metrics written to {METRICS_PATH}")
+
+# ──────────────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Music Emotion Recognition: train or eval the pipeline"
+    )
+    parser.add_argument(
+        "mode",
+        choices=["train", "eval"],
+        help="Whether to train a new model or evaluate an existing one"
+    )
+    args = parser.parse_args()
+
+    if args.mode == "train":
+        train_pipeline()
+    else:
+        evaluate_pipeline()
+
