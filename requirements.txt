@@ -1,7 +1,7 @@
 # Core ML/Data Libraries
 tensorflow>=2.8      
-numpy
-pandas
+numpy==1.25.0
+pandas==2.1.0
 scikit-learn
 imbalanced-learn     # For SMOTE
 
@@ -9,9 +9,12 @@ imbalanced-learn     # For SMOTE
 librosa
 
 # Visualization & Notebook
-matplotlib
+matplotlib==3.7.3
 seaborn
 umap-learn         # For UMAP embeddings
 jupyter            
+
+streamlit==1.30.0
+pillow==10.0.0
 
 

@@ -42,6 +42,8 @@ class MusicEmotionPipeline:
 
         # Aggregate data and print track-level distribution
         aggregated_data = self.data_manager.aggregate_data(data_subset)
+        save_path = os.path.join(self.dataset_path, "Aggregated_Data.csv")
+        aggregated_data.to_csv(save_path, index=False)
         print(f"Aggregated data shape: {aggregated_data.shape}")
         self.data_manager.print_class_distribution("Aggregated Track-level Labels",
                                                    aggregated_data[self.emotion_columns].values)
@@ -58,7 +60,7 @@ class MusicEmotionPipeline:
         self.data_manager.print_class_distribution("All Audio Segments", y_labels)
 
         # Extract features from the audio segments
-        features = self.audio_manager.extract_features(X_segments, augment=False)
+        features = self.audio_manager.extract_features_GRU(X_segments, augment=False)
         print(f"Features extracted. Shape: {features.shape}")
 
         # Split data into training, validation, and test sets
@@ -82,9 +84,12 @@ class MusicEmotionPipeline:
         input_shape = X_train_proc.shape[1:]
         num_emotions = y_train_aug.shape[1]
         model_manager = ModelManager(num_emotions, self.emotion_columns)
-        class_weights = model_manager.compute_class_weights(y_train_aug)
-        model = model_manager.build_model(input_shape, class_weights, dropout_rate=0.5,learning_rate=0.00005)
-        history = model_manager.train_model(model, X_train_proc, y_train_aug, X_val_proc, y_val, input_shape,
+        class_weights_array = model_manager.compute_class_weights(y_train_aug)
+        class_weights_dict = {i: weight for i, weight in enumerate(class_weights_array)}
+        print("Computed Class Weights:", class_weights_dict)  # Optional: print weights
+        model = model_manager.build_cnn_gru_model(input_shape, class_weights_dict, dropout_rate=0.6, learning_rate=0.00001, recurrent_units=64)
+        history = model_manager.train_model(model, X_train_proc, y_train_aug, X_val_proc, y_val,
+                                            class_weights_dict=class_weights_dict,  # Pass the dict here
                                             epochs=50, batch_size=32, patience=10)
 
         # Determine best thresholds and evaluate on the test set
@@ -150,7 +155,7 @@ def evaluate_pipeline():
     )
 
     # Extract features (no augmentation)
-    features = am.extract_features(X_seg, augment=False)
+    features = am.extract_features_GRU(X_seg, augment=False)
 
     # Split by track
     dsm = DatasetManager(EMOTION_COLUMNS)
@@ -206,18 +211,6 @@ def evaluate_pipeline():
 
 # ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Music Emotion Recognition: train or eval the pipeline"
-    )
-    parser.add_argument(
-        "mode",
-        choices=["train", "eval"],
-        help="Whether to train a new model or evaluate an existing one"
-    )
-    args = parser.parse_args()
+    train_pipeline()
 
-    if args.mode == "train":
-        train_pipeline()
-    else:
-        evaluate_pipeline()
 

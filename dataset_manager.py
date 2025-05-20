@@ -129,30 +129,34 @@ class DatasetManager:
         return X_train, X_val, X_test, y_train, y_val, y_test
 
     def preprocess_data(self, X_train, X_val, X_test):
-        """
-        Standardizes and reshapes data for a 2D CNN.
+        # X shapes are likely (num_samples, num_features, num_timesteps) before reshaping for CNN
+        print(f"Raw shapes before preprocessing: Train={X_train.shape}, Val={X_val.shape}, Test={X_test.shape}")
 
-        Parameters:
-            X_train, X_val, X_test (np.ndarray): Dataset splits.
+        # Standardize each feature channel (row) independently
+        # Calculate mean/std per feature channel ON TRAINING DATA ONLY
+        # Axis 0 is samples, Axis 1 is features, Axis 2 is time
+        mean_per_feature = np.mean(X_train, axis=(0, 2),
+                                   keepdims=True)  # Mean across samples and time, keep feature dim
+        std_per_feature = np.std(X_train, axis=(0, 2), keepdims=True)  # Std across samples and time, keep feature dim
 
-        Returns:
-            tuple: Preprocessed (X_train, X_val, X_test).
-        """
-        # Calculate mean and std from training data
-        mean = np.mean(X_train)
-        std = np.std(X_train)
+        # Add epsilon to std to avoid division by zero
+        std_per_feature += 1e-6
 
-        # Standardize all sets using training statistics
-        X_train_norm = (X_train - mean) / (std + 1e-6)
-        X_val_norm = (X_val - mean) / (std + 1e-6)
-        X_test_norm = (X_test - mean) / (std + 1e-6)
+        print(f"Shape of mean/std per feature: {mean_per_feature.shape}")  # Should be (1, num_features, 1)
 
-        # Reshape for 2D CNN if necessary
-        if len(X_train_norm.shape) == 3:
-            # For spectrograms (assuming shape is [samples, features, time])
-            # Reshape to [samples, features, time, 1] for 2D CNN
-            X_train_norm = X_train_norm.reshape(X_train_norm.shape[0], X_train_norm.shape[1], X_train_norm.shape[2], 1)
-            X_val_norm = X_val_norm.reshape(X_val_norm.shape[0], X_val_norm.shape[1], X_val_norm.shape[2], 1)
-            X_test_norm = X_test_norm.reshape(X_test_norm.shape[0], X_test_norm.shape[1], X_test_norm.shape[2], 1)
+        # Apply to all sets
+        X_train_norm = (X_train - mean_per_feature) / std_per_feature
+        X_val_norm = (X_val - mean_per_feature) / std_per_feature
+        X_test_norm = (X_test - mean_per_feature) / std_per_feature
 
-        return X_train_norm, X_val_norm, X_test_norm
+        # Reshape for 2D CNN (adding channel dimension)
+        # Input for CNN should be (batch, height, width, channels)
+        # Your features are (num_samples, num_features, num_timesteps)
+        # Let num_features be 'height', num_timesteps be 'width'
+        X_train_proc = X_train_norm[..., np.newaxis]  # Add channel dim -> (samples, features, time, 1)
+        X_val_proc = X_val_norm[..., np.newaxis]
+        X_test_proc = X_test_norm[..., np.newaxis]
+
+        print(
+            f"Shapes after preprocessing and reshape: Train={X_train_proc.shape}, Val={X_val_proc.shape}, Test={X_test_proc.shape}")
+        return X_train_proc, X_val_proc, X_test_proc
